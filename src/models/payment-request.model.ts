@@ -12,6 +12,9 @@ export interface IPayment extends Document {
     payerWallet?: string;
     expiresAt?: Date;
     confirmedAt?: Date;
+    onChainPda: String;
+    onChainCreateSignature: String;
+    onChainMarkPaidSignature: String;
 }
 
 
@@ -50,6 +53,9 @@ const paymentSchema = new mongoose.Schema({
     },
     transactionSignature: String,
     payerWallet: String,
+    onChainPda: String,
+    onChainCreateSignature: String,
+    onChainMarkPaidSignature: String,
     expiresAt: Date,
     confirmedAt: Date,
 }, { timestamps: true })

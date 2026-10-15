@@ -6,6 +6,7 @@ import { IMerchant } from "../models/merchant.model.js";
 import { IPayment } from "../models/payment-request.model.js";
 import { IWebhook } from "../models/webhook.model.js";
 import { HydratedDocument } from "mongoose";
+import { markPaid } from "../onchain/payment.js";
 
 
 type VerificationResult = {
@@ -123,6 +124,13 @@ const confirmAndNotify = async function (result: VerificationResult, merchant: I
     result.payment.payerWallet = result.payerWallet;
     result.payment.confirmedAt = new Date();
     await result.payment.save();
+
+    try {
+        const sig = await markPaid(merchant.payoutWallet, result.payment.reference);
+        if (sig) { result.payment.onChainMarkPaidSignature = sig; await result.payment.save(); }
+    } catch (err) {
+        console.error("markPaid failed", result.payment.reference, err);
+    }
 
     await deliverWebhook(result.payment, merchant);
 };

@@ -5,6 +5,8 @@ import { paymentModel } from "../models/payment-request.model.js";
 import { isConnected, connectMerchant } from "../watcher/connection-manager.js";
 import { IMerchant } from "../models/merchant.model.js";
 import { Types } from "mongoose";
+import { DECIMALS, WSOL, mintFor, toBaseUnits } from "../utils/constants.js";
+import { createPayment, derivePaymentPda } from "../onchain/payment.js";
 
 
 const createPaymentService = async function (merchant: IMerchant, amount: number, currency: "SOL" | "USDC", label: string, message: string) {
@@ -25,6 +27,21 @@ const createPaymentService = async function (merchant: IMerchant, amount: number
 
     const solanaPayUrl = url.toString();
 
+    let signature: string | null;
+    try {
+        signature = await createPayment({
+            merchantWallet: merchant.payoutWallet,
+            reference,
+            amount: toBaseUnits(amount, currency),
+            mint: mintFor(currency),
+        });
+    } catch (err) {
+        console.error("createPayment failed:", err);
+        throw new ApiError(502, "Could not record the payment on-chain");
+    }
+
+    const onChainPda = await derivePaymentPda(merchant.payoutWallet, reference);
+
     const paymentRequestData = await paymentModel.create({
         merchant: merchant._id,
         reference: reference,
@@ -32,7 +49,9 @@ const createPaymentService = async function (merchant: IMerchant, amount: number
         currency: currency,
         label: label,
         message: message,
-        expiresAt: new Date(Date.now() + (1000*60*15))
+        expiresAt: new Date(Date.now() + (1000*60*15)),
+        onChainPda: onChainPda,
+        onChainCreateSignature: signature ?? undefined,
     })
 
     if (!isConnected(merchant._id)) {

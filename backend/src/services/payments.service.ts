@@ -39,11 +39,12 @@ const createPaymentService = async function (merchant: IMerchant, amount: number
     const solanaPayUrl = url.toString();
 
     let signature: string | null;
+    const amountBaseUnits = toBaseUnits(amount, currency);
     try {
         signature = await createPayment({
             merchantWallet: merchant.payoutWallet,
             reference,
-            amount: toBaseUnits(amount, currency),
+            amount: amountBaseUnits,
             mint: mintFor(currency),
         });
     } catch (err) {
@@ -57,6 +58,7 @@ const createPaymentService = async function (merchant: IMerchant, amount: number
         merchant: merchant._id,
         reference: reference,
         amount: amount,
+        amountBaseUnits: amountBaseUnits.toString(),
         currency: currency,
         label: label,
         message: message,

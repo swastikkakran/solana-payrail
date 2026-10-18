@@ -1,6 +1,7 @@
 import mongoose, { Document } from "mongoose";
 
 export interface IMerchant extends Document {
+    name: string;
     email: string;
     apiKey: string;
     apiSecretHash: string;
@@ -20,6 +21,10 @@ export interface IMerchant extends Document {
 
 
 const merchantSchema = new mongoose.Schema({
+    name: {
+        type: String,
+        required: true,
+    },
     email: {
         type: String,
         unique: true,
@@ -58,7 +63,9 @@ const merchantSchema = new mongoose.Schema({
     },
     payoutWallet: {
         type: String,
-        required: true
+        required: true,
+        unique: true,
+        index: true,
     },
     previousCredentials: {
             apiKey: String,

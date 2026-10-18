@@ -4,12 +4,21 @@ import { merchantModel, IMerchant } from "../models/merchant.model.js";
 import { paymentModel } from "../models/payment-request.model.js";
 import bcrypt from "bcrypt";
 import { disconnectMerchant } from "../watcher/connection-manager.js";
+import { fetchMerchantAccount } from "../onchain/merchant-registry.js";
 
 
-const registerService = async function (email: string, webhookUrl: string, payoutWallet: string) {
+const registerService = async function (name: string, email: string, webhookUrl: string, payoutWallet: string) {
     
     const existingUser = await merchantModel.findOne({ email: email });
     if (existingUser) throw new ApiError(409, "Email already exists!");
+
+    const merchant = await fetchMerchantAccount(payoutWallet);
+    if (!merchant) {
+        throw new ApiError(
+            400,
+            "Merchant wallet is not registered on-chain."
+        );
+    }
 
     const apiKey = generateApiKey()
     const apiSecret = generateSecretKey()
@@ -19,6 +28,7 @@ const registerService = async function (email: string, webhookUrl: string, payou
     const { ciphertext, iv, authTag } = encrypt(webhookSecret);
 
     const user = await merchantModel.create({
+        name: name,
         email: email,
         apiKey: apiKey,
         apiSecretHash: apiSecretHash,

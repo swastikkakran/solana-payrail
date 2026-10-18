@@ -2,6 +2,8 @@ import { z } from "zod";
 import { address } from "@solana/kit";
 
 const registerMerchantSchema = z.object({
+    name: z
+        .string(),
     email: z
         .string()
         .email("Invalid email address"),

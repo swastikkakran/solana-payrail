@@ -5,8 +5,8 @@ import { registerService, keyRotationService, deleteMerchantService } from "../s
 
 const registerController = asyncHandler(async function (req, res) {
     
-    const { email, webhookUrl, payoutWallet } = req.body;
-    const registerPayload = await registerService(email, webhookUrl, payoutWallet)
+    const { name, email, webhookUrl, payoutWallet } = req.body;
+    const registerPayload = await registerService(name, email, webhookUrl, payoutWallet)
 
     res
         .status(201)

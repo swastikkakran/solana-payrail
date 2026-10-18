@@ -9,87 +9,231 @@ if (!process.env.SOLANA_RPC_URL) throw new ApiError(404, "solana devnet rpc not 
 const rpc = createSolanaRpc(process.env.SOLANA_RPC_URL);
 
 
-const verifyTransaction = async function (merchant: IMerchant, sign: string) {
-    
-    const tx = await rpc.getTransaction(signature(sign),  {
-        commitment: 'confirmed',
-        encoding: 'jsonParsed',
+const verifyTransaction = async function (
+    merchant: IMerchant,
+    sign: string
+) {
+    const tx = await rpc.getTransaction(signature(sign), {
+        commitment: "confirmed",
+        encoding: "jsonParsed",
         maxSupportedTransactionVersion: 0,
     }).send();
 
-    if (!tx) return { verified: false, reason: "tx failed or not found!"};
+    if (!tx) {
+        return {
+            verified: false,
+            reason: "tx failed or not found!",
+        };
+    }
 
-    const accountKeys = tx?.transaction.message.accountKeys.map(k => k.pubkey);
+    const accountKeys = tx.transaction.message.accountKeys.map(
+        k => k.pubkey
+    );
 
-    //check for if payment exist in db
+    // Check if payment exists in DB
     const payment = await paymentModel.findOne({
         merchant: merchant._id,
         status: "pending",
-        reference: { $in: accountKeys }
+        expiresAt: { $gt: new Date() },
+        reference: { $in: accountKeys },
     });
 
-    if (!payment) return { verified: false, reason: "no pending payment found!"};
-
-    //check if recipient's address is in transaction
-    const recipientIndex = accountKeys.indexOf(address(merchant.payoutWallet));
-    if (recipientIndex === -1) {
-        return { verified: false, payment, reason: "Recipient not found in transaction" };
+    if (!payment) {
+        return {
+            verified: false,
+            reason: "no pending payment found!",
+        };
     }
 
-    let amountReceived;
+    // Check if recipient's address is in transaction
+    const recipientIndex = accountKeys.indexOf(
+        address(merchant.payoutWallet)
+    );
+
+    if (recipientIndex === -1) {
+        return {
+            verified: false,
+            payment,
+            reason: "Recipient not found in transaction",
+        };
+    }
+
     let payerWallet: string | undefined;
 
-    if (payment.currency == "SOL") {
+    // ============================================================
+    // SOL PAYMENT
+    // ============================================================
+
+    if (payment.currency === "SOL") {
         const preBalance = tx.meta?.preBalances[recipientIndex];
         const postBalance = tx.meta?.postBalances[recipientIndex];
 
-        if (preBalance === undefined || postBalance === undefined) {
-        return { verified: false, payment, reason: "Unable to retrieve balance information" };
+        if (
+            preBalance === undefined ||
+            postBalance === undefined
+        ) {
+            return {
+                verified: false,
+                payment,
+                reason: "Unable to retrieve balance information",
+            };
         }
-        amountReceived = Number(postBalance - preBalance) / 1e9;
-        
-        const senderIndex = tx.meta?.preBalances?.findIndex(
-            (bal, i) => bal > (tx.meta?.postBalances?.[i] ?? 0) && i !== recipientIndex
-        ) ?? -1;
-        
-        payerWallet = accountKeys[senderIndex];
-    } else {
-        const preTokenBalance = tx.meta?.preTokenBalances?.find(
-            b => accountKeys[b.accountIndex] === merchant.payoutWallet
-        );
-        const postTokenBalance = tx.meta?.postTokenBalances?.find(
-            b => accountKeys[b.accountIndex] === merchant.payoutWallet
-        );
+
+        const amountReceivedBaseUnits =
+            BigInt(postBalance) - BigInt(preBalance);
+
+        if (
+            amountReceivedBaseUnits !==
+            BigInt(payment.amountBaseUnits)
+        ) {
+            return {
+                verified: false,
+                payment,
+                reason: "Amount mismatch",
+            };
+        }
+
+        const senderIndex =
+            tx.meta?.preBalances?.findIndex(
+                (bal, i) =>
+                    bal >
+                        (tx.meta?.postBalances?.[i] ?? 0) &&
+                    i !== recipientIndex
+            ) ?? -1;
+
+        payerWallet =
+            senderIndex >= 0
+                ? accountKeys[senderIndex]
+                : undefined;
+    }
+
+    // ============================================================
+    // USDC PAYMENT
+    // ============================================================
+
+    else {
+        const preTokenBalances =
+            tx.meta?.preTokenBalances ?? [];
+
+        const postTokenBalances =
+            tx.meta?.postTokenBalances ?? [];
+
+        const expectedMint =
+            process.env.USDC_MINT_ADDRESS;
+
+        if (!expectedMint) {
+            return {
+                verified: false,
+                payment,
+                reason: "USDC_MINT_ADDRESS is not configured",
+            };
+        }
+
+        /*
+         * Find the merchant's token account by looking at the
+         * token balance owner.
+         *
+         * accountIndex refers to the token account, while
+         * tokenAmount belongs to that token account.
+         */
+        const preTokenBalance =
+            preTokenBalances.find(
+                b =>
+                    b.mint === expectedMint &&
+                    b.owner === merchant.payoutWallet
+            );
+
+        const postTokenBalance =
+            postTokenBalances.find(
+                b =>
+                    b.mint === expectedMint &&
+                    b.owner === merchant.payoutWallet
+            );
 
         if (!preTokenBalance || !postTokenBalance) {
-            return { verified: false, payment, reason: "Token balance entries not found" };
+            return {
+                verified: false,
+                payment,
+                reason: "Merchant USDC token balance not found",
+            };
         }
 
-        // Ensure uiAmount values exist before performing arithmetic
-        const postAmount = parseFloat(postTokenBalance.uiTokenAmount.uiAmountString);
-        const preAmount = parseFloat(preTokenBalance.uiTokenAmount.uiAmountString);
-
-        if (isNaN(postAmount) || isNaN(preAmount)) {
-            return { verified: false, payment, reason: "Invalid or missing token amount values" };
+        // Make absolutely sure we're checking the expected mint.
+        if (
+            preTokenBalance.mint !== expectedMint ||
+            postTokenBalance.mint !== expectedMint
+        ) {
+            return {
+                verified: false,
+                payment,
+                reason: "Unexpected token mint",
+            };
         }
 
-        amountReceived = postAmount - preAmount;
+        /*
+         * IMPORTANT:
+         *
+         * uiTokenAmount.amount is the raw integer amount.
+         *
+         * Example:
+         *
+         * 1.25 USDC
+         *
+         * becomes:
+         *
+         * "1250000"
+         *
+         * because USDC has 6 decimals.
+         *
+         * We compare these raw integers directly.
+         */
+        const preAmount =
+            BigInt(preTokenBalance.uiTokenAmount.amount);
 
-        const preTokenBalances = tx.meta?.preTokenBalances ?? [];
+        const postAmount =
+            BigInt(postTokenBalance.uiTokenAmount.amount);
 
-        const senderTokenBalance = preTokenBalances.find(
-            b => b.mint === preTokenBalance.mint && accountKeys[b.accountIndex] !== merchant.payoutWallet
-        );
+        const amountReceivedBaseUnits =
+            postAmount - preAmount;
 
-        payerWallet = senderTokenBalance ? accountKeys[senderTokenBalance.accountIndex] : undefined;
+        if (
+            amountReceivedBaseUnits !==
+            BigInt(payment.amountBaseUnits)
+        ) {
+            return {
+                verified: false,
+                payment,
+                reason: "Amount mismatch",
+            };
+        }
+
+        /*
+         * Try to determine the payer.
+         *
+         * For SPL transfers, the payer's token account is
+         * different from the payer's wallet address.
+         *
+         * The token balance entry's owner gives us the wallet.
+         */
+        const senderTokenBalance =
+            preTokenBalances.find(
+                b =>
+                    b.mint === expectedMint &&
+                    b.owner &&
+                    b.owner !== merchant.payoutWallet
+            );
+
+        payerWallet =
+            senderTokenBalance?.owner;
     }
 
-    if (amountReceived !== payment.amount) {
-        return { verified: false, payment, reason: "Amount mismatch" };
-    }
-
-    return { verified: true, payment, payerWallet, transactionSignature: sign}
-}
+    return {
+        verified: true,
+        payment,
+        payerWallet,
+        transactionSignature: sign,
+    };
+};
 
 
 const reconcilePendingPayments = async function (merchant: IMerchant) {

@@ -1,6 +1,7 @@
 skip_local_validator = true
 
 [toolchain]
+package_manager = "npm"
 
 [features]
 resolution = true
@@ -17,6 +18,6 @@ cluster = "devnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]
-test = "yarn run ts-mocha -p ./tests/tsconfig.json -t 1000000 tests/**/*.ts"
+test = "npm run test:anchor"
 
-[hooks]
+

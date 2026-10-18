@@ -1,23 +1,13 @@
 {
   "compilerOptions": {
+    "target": "ES2022",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "target": "ES2022",
-
-    "rootDir": ".",
-    "outDir": "./dist",
-
-    "allowJs": true,
-
     "strict": true,
-
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
-    "allowImportingTsExtensions": false,
-    "types": ["mocha", "chai", "node"]
-  },
-  "include": ["src/**/*", "server.ts", "tests/**/*"],
-  "exclude": ["node_modules", "dist"]
+    "noEmit": true
+  }
 }

@@ -4,6 +4,7 @@ export interface IPayment extends Document {
     merchant: Types.ObjectId;
     reference: string;
     amount: number;
+    amountBaseUnits: string;
     currency: "SOL" | "USDC";
     label?: string;
     message?: string;
@@ -13,8 +14,8 @@ export interface IPayment extends Document {
     expiresAt?: Date;
     confirmedAt?: Date;
     onChainPda: String;
-    onChainCreateSignature: String;
-    onChainMarkPaidSignature: String;
+    onChainCreateSignature?: String;
+    onChainMarkPaidSignature?: String;
 }
 
 
@@ -33,6 +34,10 @@ const paymentSchema = new mongoose.Schema({
     amount: {
         type: Number,
         required: true
+    },
+    amountBaseUnits: {
+        type: String,
+        required: true,
     },
     currency: {
         type: String,

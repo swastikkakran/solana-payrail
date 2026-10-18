@@ -48,20 +48,23 @@ const registerService = async function (name: string, email: string, webhookUrl:
 
 const keyRotationService = async function (merchant: IMerchant) {
 
-    merchant.previousCredentials!.apiKey = merchant.apiKey;
-    merchant.previousCredentials!.apiSecretHash = merchant.apiSecretHash;
-    merchant.previousCredentials!.expiresAt = new Date(Date.now() + (1000*60*60*24))
+    merchant.previousCredentials = {
+        apiKey: merchant.apiKey,
+        apiSecretHash: merchant.apiSecretHash,
+        expiresAt: new Date(Date.now() + (1000 * 60 * 60 * 24))
+    };
 
-    const newApiKey = generateApiKey()
-    const newApiSecret = generateSecretKey()
+    const newApiKey = generateApiKey();
+    const newApiSecret = generateSecretKey();
     const newApiSecretHash = await bcrypt.hash(newApiSecret, 10);
 
     merchant.apiKey = newApiKey;
-    merchant.apiSecretHash = newApiSecretHash
-    await merchant.save()
+    merchant.apiSecretHash = newApiSecretHash;
 
-    return { newApiKey, newApiSecret }
-}
+    await merchant.save();
+
+    return { newApiKey, newApiSecret };
+};
 
 
 const deleteMerchantService = async function (merchant: IMerchant) {

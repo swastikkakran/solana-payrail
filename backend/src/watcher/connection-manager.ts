@@ -27,6 +27,12 @@ const handleLog = async function (merchant: IMerchant, logSignature: string) {
 }
 
 const connectMerchant = async function (merchant: IMerchant) {
+
+    const merchantId = merchant._id.toString();
+
+    if (activeSubscriptions.has(merchantId)) {
+        return;
+    }
     
     const hasPending = await paymentModel.exists({
         merchant: merchant._id,
@@ -39,7 +45,7 @@ const connectMerchant = async function (merchant: IMerchant) {
     }
 
     const controller = new AbortController();
-    activeSubscriptions.set(merchant._id.toString(), controller);
+    activeSubscriptions.set(merchantId, controller);
 
     const subscription = await rpcSubscription.logsNotifications(
         { mentions: [address(merchant.payoutWallet)] },
@@ -53,10 +59,13 @@ const connectMerchant = async function (merchant: IMerchant) {
         }
     } catch (err) {
         if (!controller.signal.aborted) {
-            activeSubscriptions.delete(merchant._id.toString());
-            await connectMerchant(merchant);
+            activeSubscriptions.delete(merchantId);
+
+            setTimeout(() => {
+                void connectMerchant(merchant);
+            }, 5000);
         }
-    }
+        }
     })();
 }
 

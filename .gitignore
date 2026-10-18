@@ -11,5 +11,3 @@ test-ledger
 .surfpool
 
 tests/fixtures
-
-src/onchain/generated

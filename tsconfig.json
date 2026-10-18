@@ -9,5 +9,11 @@
     "skipLibCheck": true,
     "resolveJsonModule": true,
     "noEmit": true
-  }
+  },
+  "exclude": [
+    "node_modules",
+    "app",
+    "backend",
+    "target"
+  ]
 }

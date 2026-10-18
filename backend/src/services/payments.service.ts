@@ -7,9 +7,20 @@ import { IMerchant } from "../models/merchant.model.js";
 import { Types } from "mongoose";
 import { DECIMALS, WSOL, mintFor, toBaseUnits } from "../utils/constants.js";
 import { createPayment, derivePaymentPda } from "../onchain/payment.js";
+import { fetchMerchantAccount } from "../onchain/merchant-registry.js";
 
 
-const createPaymentService = async function (merchant: IMerchant, amount: number, currency: "SOL" | "USDC", label: string, message: string) {
+const createPaymentService = async function (merchant: IMerchant, amount: number, currency: "SOL" | "USDC", label?: string, message?: string) {
+
+    const onChainMerchant = await fetchMerchantAccount(merchant.payoutWallet);
+
+    if (!onChainMerchant) {
+        throw new ApiError(400, "Merchant is not registered on-chain");
+    }
+
+    if (!onChainMerchant.isActive) {
+        throw new ApiError(403, "Merchant is inactive");
+    }
     
     const referenceKeyPair = generateKeyPairSigner();
     const reference = (await referenceKeyPair).address;

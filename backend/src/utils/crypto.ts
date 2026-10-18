@@ -44,4 +44,28 @@ function decrypt(ivHex: string, authTagHex: string, ciphertextHex: string) {
     return decrypted;
 }
 
-export { generateApiKey, generateSecretKey, encrypt, decrypt }
+const generateNonce = function () {
+    return crypto.randomBytes(32).toString("hex");
+};
+
+const generateSessionToken = function () {
+    return crypto.randomBytes(32).toString("hex");
+};
+
+const hashToken = function (token: string) {
+    return crypto
+        .createHash("sha256")
+        .update(token)
+        .digest("hex");
+};
+
+
+export {
+    generateApiKey,
+    generateSecretKey,
+    encrypt,
+    decrypt,
+    generateNonce,
+    generateSessionToken,
+    hashToken,
+};

@@ -1,7 +1,10 @@
 import { ApiError } from "../utils/api-error.js";
 import { asyncHandler } from "../utils/async-handler.js";
 import { merchantModel } from "../models/merchant.model.js";
+import { sessionModel } from "../models/session.model.js";
+import { hashToken } from "../utils/crypto.js";
 import bcrypt from "bcrypt";
+import { IMerchant } from "../models/merchant.model.js";
 
 
 const checkCredentials = async function (apiKey: string | string[]) {
@@ -54,4 +57,51 @@ const strictApiMiddleware = asyncHandler(async function (req, res, next) {
     next()
 })
 
-export { normalApiMiddleware, strictApiMiddleware }
+const walletSessionMiddleware = asyncHandler(async function (req, res, next) {
+    const cookies = req.headers.cookie;
+
+    if (!cookies) {
+        throw new ApiError(401, "Not authenticated");
+    }
+
+    const sessionCookie = cookies
+        .split(";")
+        .map(cookie => cookie.trim())
+        .find(cookie => cookie.startsWith("payrail_session="));
+
+    if (!sessionCookie) {
+        throw new ApiError(401, "Not authenticated");
+    }
+
+    const sessionToken = decodeURIComponent(
+        sessionCookie.slice("payrail_session=".length)
+    );
+
+    const tokenHash = hashToken(sessionToken);
+
+    const session = await sessionModel
+    .findOne({ tokenHash })
+    .populate<{ merchant: IMerchant }>("merchant");
+
+    if (!session) {
+        throw new ApiError(401, "Invalid session");
+    }
+
+    if (session.expiresAt <= new Date()) {
+        await sessionModel.deleteOne({
+            _id: session._id,
+        });
+
+        throw new ApiError(401, "Session expired");
+    }
+
+    if (!session.merchant) {
+        throw new ApiError(401, "Merchant account not found");
+    }
+
+    req.merchant = session.merchant;
+
+    next();
+});
+
+export { normalApiMiddleware, strictApiMiddleware, walletSessionMiddleware }

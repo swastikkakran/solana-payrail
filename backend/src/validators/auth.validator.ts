@@ -28,5 +28,38 @@ const registerMerchantSchema = z.object({
         }, "payoutWallet must be a valid Solana address")
 });
 
-export { registerMerchantSchema };
+const walletChallengeSchema = z.object({
+    walletAddress: z
+        .string()
+        .refine((val) => {
+            try {
+                address(val);
+                return true;
+            } catch {
+                return false;
+            }
+        }, "walletAddress must be a valid Solana address"),
+});
+
+const walletVerifySchema = z.object({
+    walletAddress: z
+        .string()
+        .refine((val) => {
+            try {
+                address(val);
+                return true;
+            } catch {
+                return false;
+            }
+        }, "walletAddress must be a valid Solana address"),
+
+    signature: z
+        .string()
+        .min(1, "signature is required"),
+});
+
+export { registerMerchantSchema, walletChallengeSchema, walletVerifySchema };
+
 export type RegisterMerchantInput = z.infer<typeof registerMerchantSchema>;
+export type WalletChallengeInput = z.infer<typeof walletChallengeSchema>;
+export type WalletVerifyInput = z.infer<typeof walletVerifySchema>;

@@ -77,6 +77,7 @@ interface WalletContextValue {
     dialogOpen: boolean;
     openDialog: () => void;
     closeDialog: () => void;
+    signMessage: (message: string) => Promise<Uint8Array>;
 }
 
 const WalletContext = createContext<WalletContextValue | null>(null);
@@ -146,6 +147,20 @@ function WalletSession({ children }: { children: ReactNode }) {
         }
     }, [setAccount, wallet]);
 
+    const signMessage = useCallback(async (message: string) => {
+        if (!account || !wallet) throw new Error('Connect a wallet first.');
+        const feature = getWalletFeature(wallet, 'solana:signMessage') as {
+            signMessage: (input: { account: UiWalletAccount; message: Uint8Array }) => Promise<{ signature: Uint8Array }[]>;
+        };
+        const result = await feature.signMessage({
+            account,
+            message: new TextEncoder().encode(message),
+        });
+        const signature = result[0]?.signature;
+        if (!signature) throw new Error('Wallet did not return a signature.');
+        return new Uint8Array(signature);
+    }, [account, wallet]);
+
     const value = useMemo<WalletContextValue>(
         () => ({
             account,
@@ -157,8 +172,9 @@ function WalletSession({ children }: { children: ReactNode }) {
             dialogOpen,
             openDialog: () => setDialogOpen(true),
             closeDialog: () => setDialogOpen(false),
+            signMessage,
         }),
-        [account, wallet, wallets, setAccount, disconnect, restoring, dialogOpen],
+        [account, wallet, wallets, setAccount, disconnect, restoring, dialogOpen, signMessage],
     );
 
     return <WalletContext.Provider value={value}>{children}</WalletContext.Provider>;

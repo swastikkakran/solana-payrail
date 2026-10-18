@@ -9,7 +9,6 @@ import { EXAMPLE } from './example';
 import { HeroCheckout } from './HeroCheckout';
 import { LiveDevnet } from './LiveDevnet';
 import { RailSchematic } from './RailSchematic';
-import { Roadmap } from './Roadmap';
 
 const CUSTODY_ROWS: { what: string; wallet: string; payrail: string; chain: string }[] = [
     {
@@ -314,7 +313,6 @@ export function Landing() {
                 </div>
             </section>
 
-            <Roadmap />
 
             <section className="closing page" aria-labelledby="closing-title">
                 <div className="closing-inner">

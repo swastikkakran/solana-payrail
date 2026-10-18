@@ -5,6 +5,7 @@ import { DEMO } from '../demo/mode';
 import { explorerAddressUrl, shortAddress } from '../lib/format';
 import { Link, useRouter } from '../lib/router';
 import { WalletButton } from '../wallet/WalletButton';
+import { useWallet } from '../wallet/WalletProvider';
 import { CopyButton } from './CopyButton';
 import { ExternalIcon, RailMark } from './Icons';
 
@@ -27,6 +28,7 @@ const NAV = [
 
 export function SiteHeader() {
     const { path } = useRouter();
+    const { account } = useWallet();
     const [scrolled, setScrolled] = useState(false);
     const [menuOpen, setMenuOpen] = useState(false);
     useEffect(() => setMenuOpen(false), [path]);
@@ -69,6 +71,7 @@ export function SiteHeader() {
                         {clusterLabel[config.cluster]}
                         {DEMO && <span className="cluster-demo">Demo</span>}
                     </span>
+                    {account && <Link to="/dashboard" className="header-dashboard-link">Dashboard</Link>}
                     <WalletButton />
                     <button
                         type="button"
@@ -85,6 +88,7 @@ export function SiteHeader() {
             {menuOpen && (
                 <nav id="mobile-nav" className="mobile-nav" aria-label="Primary">
                     <div className="page">
+                        {account && <Link to="/dashboard" onClick={() => setMenuOpen(false)}>Dashboard</Link>}
                         {NAV.map(n => (
                             <Link key={n.to} to={n.to} onClick={() => setMenuOpen(false)} aria-current={n.to === path ? 'page' : undefined}>
                                 {n.label}

@@ -5,6 +5,7 @@ import './styles/base.css';
 import './styles/components.css';
 import './styles/landing.css';
 import './styles/register.css';
+import './styles/dashboard.css';
 
 import { App } from './App';
 import { DEMO } from './demo/mode';

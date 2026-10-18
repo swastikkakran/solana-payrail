@@ -165,3 +165,7 @@ Run `npm run build` and one registration on devnet with Phantom before presentin
    today. The UI says payments "may be rejected", following the PRD wording.
 5. **`update` toggles rather than sets.** A `set_active(bool)` instruction would remove the read-before-sign
    race the frontend currently guards against.
+
+## Frontend environment
+
+Copy `.env.example` to `.env` when deploying locally. The included `.env` contains only public network/API endpoint configuration; never place merchant API secrets in Vite environment variables.

@@ -76,7 +76,7 @@ export function registerDemoWallet() {
             address: k.address,
             publicKey: k.publicKey,
             chains: [config.chain],
-            features: ['solana:signTransaction'],
+            features: ['solana:signTransaction', 'solana:signMessage'],
             label: 'Demo merchant',
             icon: ICON,
         });
@@ -142,6 +142,15 @@ export function registerDemoWallet() {
                     if (event !== 'change') return () => {};
                     listeners.add(listener);
                     return () => listeners.delete(listener);
+                },
+            },
+            'solana:signMessage': {
+                version: '1.0.0',
+                async signMessage(input: { account: unknown; message: Uint8Array }) {
+                    const ok = await requestApproval({ kind: 'message', message: new TextDecoder().decode(input.message) });
+                    if (!ok) throw Object.assign(new Error('User rejected the signature.'), { code: 4001 });
+                    const k = await keys();
+                    return [{ signedMessage: input.message, signature: await k.sign(input.message) }];
                 },
             },
             'solana:signTransaction': {

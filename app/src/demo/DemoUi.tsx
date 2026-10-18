@@ -71,6 +71,7 @@ export function DemoWalletPrompt() {
 
     if (!req) return null;
     const sign = req.kind === 'sign' ? req : null;
+    const message = req.kind === 'message' ? req : null;
     const copy = sign ? INSTRUCTION_COPY[sign.instruction] : null;
 
     return (
@@ -95,23 +96,17 @@ export function DemoWalletPrompt() {
                         <h2 id="dw-title">Approve transaction</h2>
                         <p className="dw-sub">{copy.title}</p>
                         <dl className="dw-list">
-                            <div>
-                                <dt>Program</dt>
-                                <dd className="mono">{shortAddress(sign.program || config.programId)}</dd>
-                            </div>
-                            <div>
-                                <dt>Instruction</dt>
-                                <dd className="mono">{sign.instruction}</dd>
-                            </div>
-                            <div>
-                                <dt>Accounts</dt>
-                                <dd>{sign.accounts.length}</dd>
-                            </div>
-                            <div>
-                                <dt>Estimated cost</dt>
-                                <dd className="mono num">{lamportsToSol(copy.cost)} SOL</dd>
-                            </div>
+                            <div><dt>Program</dt><dd className="mono">{shortAddress(sign.program || config.programId)}</dd></div>
+                            <div><dt>Instruction</dt><dd className="mono">{sign.instruction}</dd></div>
+                            <div><dt>Accounts</dt><dd>{sign.accounts.length}</dd></div>
+                            <div><dt>Estimated cost</dt><dd className="mono num">{lamportsToSol(copy.cost)} SOL</dd></div>
                         </dl>
+                    </>
+                ) : message ? (
+                    <>
+                        <h2 id="dw-title">Approve sign-in</h2>
+                        <p className="dw-sub">This is an off-chain signature. It does not create a transaction or move funds.</p>
+                        <div className="dw-message">{message.message}</div>
                     </>
                 ) : (
                     <>
@@ -122,10 +117,10 @@ export function DemoWalletPrompt() {
 
                 <div className="dw-actions">
                     <button type="button" className="btn btn-secondary" onClick={() => req.resolve(false)}>
-                        {sign ? 'Reject' : 'Cancel'}
+                        {sign || message ? 'Reject' : 'Cancel'}
                     </button>
                     <button ref={approveRef} type="button" className="btn btn-primary" onClick={() => req.resolve(true)}>
-                        {sign ? 'Approve' : 'Connect'}
+                        {sign || message ? 'Approve' : 'Connect'}
                     </button>
                 </div>
             </div>

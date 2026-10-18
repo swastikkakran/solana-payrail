@@ -1,7 +1,7 @@
 import mongoose, { Document } from "mongoose";
 
 export interface IMerchant extends Document {
-    name: string;
+    name?: string;
     email: string;
     apiKey: string;
     apiSecretHash: string;
@@ -23,7 +23,8 @@ export interface IMerchant extends Document {
 const merchantSchema = new mongoose.Schema({
     name: {
         type: String,
-        required: true,
+        trim: true,
+        maxlength: 100,
     },
     email: {
         type: String,

@@ -3,7 +3,10 @@ import { address } from "@solana/kit";
 
 const registerMerchantSchema = z.object({
     name: z
-        .string(),
+        .string()
+        .trim()
+        .max(100, "name must be 100 characters or fewer")
+        .optional(),
     email: z
         .string()
         .email("Invalid email address"),

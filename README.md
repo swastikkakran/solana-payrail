@@ -1,282 +1,354 @@
-# Solana Payment Gateway
+# Payrail
 
-A non-custodial payment processing backend for Solana — accept SOL and USDC payments, get real-time confirmation, and receive signed webhooks the moment a customer pays. Built as a scoped-down version of the payments infrastructure a merchant would otherwise have to build in-house: reference-based order matching, on-chain transaction verification, and reliable webhook delivery with retries.
+**A non-custodial payment gateway for Solana merchants.**
+Customers pay the merchant's wallet directly. Payrail tags every order, verifies the payment on-chain, records it on Solana, and notifies the merchant with a signed webhook.
 
-Unlike a traditional payment processor, this system **never custodies funds**. Money moves directly from customer wallet to merchant wallet on-chain; this backend only watches, verifies, and notifies.
+<!-- Add a demo video or GIF here -->
+
+> Built as the final project for the Solana School Fall 2026 cohort's Demo Day. It is a working prototype and a portfolio piece, not production payments infrastructure. See [Scope and known limitations](#scope-and-known-limitations) for an honest list of what it does not do.
+
+**Contents:** [The problem](#the-problem) · [What Payrail does](#what-payrail-does) · [How it works](#how-it-works) · [Core concepts](#core-concepts) · [Architecture](#architecture) · [On-chain program](#on-chain-program) · [Getting started](#getting-started) · [API reference](#api-reference) · [Webhooks](#webhooks) · [Security design](#security-design) · [Scope and known limitations](#scope-and-known-limitations)
 
 ---
+
+## The problem
+
+Accepting crypto payments sounds simple: the customer sends money to your wallet. In practice, three things get in the way.
+
+1. **A transfer is not an order.** Two customers can send exactly 0.05 SOL to the same wallet. The chain only records "someone paid 0.05 SOL", not which order each payment belongs to.
+2. **The plumbing is hard to get right.** A merchant has to watch the chain, check the amount, token and recipient of each transaction, survive dropped connections, and notify their own server. Each of these is a place for bugs.
+3. **Custodial gateways hold the money.** Traditional processors sit between buyer and merchant, take custody of the funds, and pay out later.
+
+## What Payrail does
+
+Payrail is the layer in the middle. A merchant registers once and then creates payment requests through a REST API. For each request Payrail returns a [Solana Pay](https://docs.solanapay.com/) URL to show as a QR code or link.
+
+- **Funds never touch Payrail.** The customer's wallet sends SOL or USDC straight to the merchant's payout wallet.
+- **Every order gets a unique reference key**, so identical payments can still be told apart.
+- **Payrail verifies, records and notifies.** It watches the chain, checks that reference, amount, token and recipient all match, writes the result to an on-chain Payment account, and sends the merchant a signed `payment.confirmed` webhook.
+- **It recovers from outages.** If the server was offline when a payment landed, a recovery sweep finds it afterwards.
+
+## Highlights
+
+- Non-custodial: buyer → merchant, directly
+- Solana Pay payment requests with one-time reference keys
+- Live detection over WebSocket, plus a recovery sweep for missed events
+- Four-field verification: reference, amount, token, recipient
+- On-chain merchant registry and per-payment records (Anchor program)
+- HMAC-SHA256 signed webhooks with automatic retries
+- Wallet-based sign-in using single-use signed challenges
+- React merchant app with a fully simulated demo mode
 
 ## How it works
 
-```
-Merchant                  This API                    Solana                 Customer's wallet
-   │                          │                          │                         │
-   │  POST /payments          │                          │                         │
-   ├─────────────────────────>│                          │                         │
-   │                          │  generate reference      │                         │
-   │                          │  build Solana Pay URL    │                         │
-   │  <- solanaPayUrl         │                          │                         │
-   │<─────────────────────────┤                          │                         │
-   │                          │                          │                         │
-   │  (show QR to customer)   │                          │                         │
-   │──────────────────────────────────────────────────────────────────────────────>│
-   │                          │                          │   customer approves     │
-   │                          │                          │<────────────────────────┤
-   │                          │ live tx detected         │                         │
-   │                          │ (logsNotifications)      │                         │
-   │                          │<─────────────────────────┤                         │
-   │                          │  verify amount/token/    │                         │
-   │                          │  recipient/reference     │                         │
-   │                          │  mark payment "confirmed"│                         │
-   │  <- signed webhook       │                          │                         │
-   │<─────────────────────────┤                          │                         │
+```mermaid
+sequenceDiagram
+    participant M as Merchant server
+    participant P as Payrail API
+    participant C as Anchor program
+    participant W as Customer wallet
+    participant N as Solana RPC
+
+    M->>P: POST /payments (amount, currency)
+    P->>P: generate fresh reference keypair
+    P->>C: create_payment (oracle-signed)
+    P-->>M: solanaPayUrl + payment record
+    M-->>W: show QR code or link
+    W->>N: transfer to merchant wallet, including the reference
+    N-->>P: log notification (WebSocket)
+    P->>N: fetch the transaction
+    P->>P: match reference, amount, token, recipient
+    P->>C: mark_paid (oracle-signed)
+    P-->>M: webhook payment.confirmed (HMAC-signed)
 ```
 
-1. Merchant creates a payment request via the API.
-2. The backend generates a one-time **reference key** (a disposable keypair used purely to tag the transaction — it never holds funds and never signs anything) and builds a [Solana Pay](https://docs.solanapay.com/) URL.
-3. The merchant shows this as a QR code or link. The customer pays directly from their own wallet to the merchant's wallet, on-chain.
-4. A live WebSocket subscription (`logsNotifications`) watches the merchant's payout wallet. The moment a matching transaction lands, it's parsed, verified against the expected amount/token/recipient/reference, and the payment is marked `confirmed`.
-5. A signed webhook is delivered to the merchant's server, with automatic retry on failure.
+1. **Onboard.** The merchant connects a wallet and signs an `initialize` transaction that creates their on-chain Merchant account. They then register with the backend, which checks that this account exists and returns an API key, API secret and webhook secret (shown once).
+2. **Create.** The merchant's server calls `POST /api/v1/payments`.
+3. **Record.** Payrail generates a fresh reference keypair, builds the Solana Pay URL, creates a Payment PDA on-chain, and saves the pending payment in MongoDB. The request is valid for 15 minutes.
+4. **Pay.** The customer scans the QR code or opens the link in a Solana Pay compatible wallet and approves the transfer. SOL or USDC goes directly to the merchant.
+5. **Verify.** A per-merchant WebSocket subscription sees the transaction. Payrail fetches it and checks reference, amount, token and recipient.
+6. **Confirm and notify.** The payment is marked confirmed, the Payment PDA is marked paid on-chain, and a signed webhook is sent to the merchant.
 
----
+## Core concepts
 
-## Why a reference key?
+### The reference key
 
-Solana transactions have no native concept of "orders." A transfer only knows sender, recipient, amount — nothing that says *which* payment request it belongs to. If a merchant has multiple pending payments for the same amount, there's no way to tell them apart from the transaction alone.
+For every payment request, Payrail generates a **fresh keypair and uses only its public key** as the reference. The reference is added to the Solana Pay transfer as a read-only, non-signer account. It never receives funds and never signs anything. Its only job is to tag the transaction, so that two orders with the same amount and the same recipient still produce different, matchable transactions.
 
-The fix: at creation time, this backend generates a fresh keypair and includes **only its public key** as a non-signing, non-writable account in the eventual transaction (part of the Solana Pay spec, not the base protocol). It's a disposable tag, not a wallet — used purely so the watcher can find and match the exact payment a transaction belongs to.
+### Four-field verification
 
----
+A payment is confirmed only when the observed transaction matches the pending order on all four fields:
 
-## Detection: live watcher + reconciliation sweep
+| Field | Meaning |
+| --- | --- |
+| **Reference** | Order identity: the fresh public key for this order |
+| **Amount** | The exact quantity, compared in base units |
+| **Token** | SOL, or the configured USDC mint |
+| **Recipient** | The merchant's payout wallet |
 
-Real-time detection alone isn't enough — a WebSocket subscription only catches events that happen *while it's connected*. If the server restarts or a connection drops, anything that happened during that gap would be missed. This system uses two complementary mechanisms:
+An event on the chain is not proof of payment by itself. Only a full match confirms it.
 
-- **Live subscription (`logsNotifications`)** — one WebSocket subscription per merchant, filtered to their `payoutWallet`. Fires in real time the moment a matching transaction lands. Managed via `AbortController` — each merchant's subscription can be cleanly cancelled without affecting others.
-- **Reconciliation sweep** — runs once whenever a merchant's subscription is (re)established: at server boot, and whenever a merchant creates their first pending payment while unwatched. It queries the 50 most recent transactions against the merchant's wallet and checks each one against currently pending payments — catching anything that happened while nothing was listening.
+### Payment lifecycle
 
-Both paths converge on the same verification logic (`verifyTransaction`) and the same confirmation/webhook logic (`confirmAndNotify`), so a live-detected payment and a reconciled one are verified identically — no duplicated, divergent logic between the two.
+`pending` → `confirmed`, `failed` or `expired`. A request expires 15 minutes after creation.
 
-The watcher also auto-reconnects on unexpected crashes: if the `for await` loop on a subscription throws due to a network error, it detects that the abort was not intentional (via `controller.signal.aborted`) and restarts `connectMerchant` automatically.
+### Live detection and recovery
 
-This was tested directly: a payment created, paid *while the server was offline*, and correctly picked up and confirmed by the reconciliation sweep on restart — with the webhook still firing correctly.
+Payrail holds one `logsNotifications` WebSocket subscription per merchant payout wallet, with automatic reconnect. WebSocket events are transient, so on startup and on every re-subscription Payrail also runs a **recovery sweep**: it inspects the most recent 50 transactions for the merchant's wallet and runs them through the same verifier used for live detection.
 
----
+## Architecture
 
-## Security model
-
-- **API key + secret**, not sessions. This is a developer-facing API — merchants integrate from their own backend, not a browser — so there's no login flow. The API secret is the credential; it's shown once, at registration, and never stored or transmitted in raw form again (only its bcrypt hash is persisted).
-- **Credential rotation with a grace window.** Rotating keys doesn't require flipping a switch and hoping every server picks up the new key instantly — the previous credential set remains valid for 24 hours after rotation, then automatically stops working. (v2 supports exactly one grace-window credential set at a time; a second rotation within an active window immediately invalidates the first.)
-- **Webhook secrets are encrypted, not hashed.** This is a deliberate distinction from the API secret: an API secret only ever needs to be *compared against*, so a one-way bcrypt hash is correct and sufficient. A webhook secret needs to be *reused* every time a webhook is signed — so it's encrypted with AES-256-GCM instead, using a master key held outside the database (env var in this version; intended for a proper KMS in production), with the IV and auth tag stored alongside the ciphertext.
-- **Webhook payloads are HMAC-signed** (SHA-256) using each merchant's own webhook secret, sent as an `x-webhook-signature` header.
-
----
-
-## Verifying webhooks (read this before integrating)
-
-Every webhook delivery includes an `x-webhook-signature` header — an HMAC-SHA256 of the exact request body, using the webhook secret you were given at registration.
-
-**Important:** verify the signature against the **raw request body bytes**, not a re-serialized version of the parsed JSON. If you `JSON.parse()` the body and then `JSON.stringify()` it again before hashing, there's no guarantee the resulting string matches byte-for-byte what was originally signed (key ordering, whitespace, and serialization differences between JSON libraries can all change the output) — and the signatures won't match even though the data is identical. Most HTTP frameworks expose the raw, unparsed body specifically for this reason (e.g. Express's `express.raw()`).
-
-```js
-const crypto = require("crypto");
-
-function verifyWebhook(rawBody, signatureHeader, webhookSecret) {
-    const expected = crypto
-        .createHmac("sha256", webhookSecret)
-        .update(rawBody) // raw string/buffer, not a re-parsed object
-        .digest("hex");
-
-    return crypto.timingSafeEqual(
-        Buffer.from(expected),
-        Buffer.from(signatureHeader)
-    );
-}
+```mermaid
+flowchart LR
+    MS["Merchant server"] -->|"REST + API key"| API["Payrail API<br/>Express 5, TypeScript"]
+    APP["Merchant web app<br/>React, Vite"] -->|"wallet sign-in"| API
+    API --> DB[("MongoDB<br/>merchants, payments, webhook deliveries")]
+    API -->|"create_payment, mark_paid"| PRG["Anchor program<br/>Merchant + Payment PDAs"]
+    WATCH["Watcher + verifier"] -->|"logsNotifications"| RPC["Solana RPC"]
+    API --- WATCH
+    CUST["Customer wallet"] -->|"SOL / USDC transfer"| MW["Merchant payout wallet"]
+    WATCH -->|"signed webhook"| MS
 ```
 
-### Webhook payload
+Two paths run side by side:
+
+- **Funds path:** customer wallet → merchant payout wallet. Direct, no custody.
+- **Evidence path:** watcher → verifier → Payment PDA + MongoDB → webhook.
+
+## On-chain program
+
+`merchant_registry` is an Anchor program deployed on devnet at
+`8v5vhk23UWumv3ReypP8hetreRsLFMcACDhrn2mZb38b`.
+
+| Instruction | Signer | What it does |
+| --- | --- | --- |
+| `initialize` | Merchant wallet | Creates the Merchant PDA, seeded by the payout wallet |
+| `update` | Merchant wallet | Toggles the merchant's active flag |
+| `create_payment` | Payrail oracle | Creates a Payment PDA (seeded by merchant and reference hash) holding amount and mint |
+| `mark_paid` | Payrail oracle | Marks a payment as paid |
+
+The oracle's public key is hard-coded in the program as `ORACLE_AUTHORITY`, and the backend refuses to start if the loaded keypair does not match it. The TypeScript client is generated from the program's IDL with [Codama](https://github.com/codama-idl/codama).
+
+## Tech stack
+
+| Layer | Technology |
+| --- | --- |
+| Program | Rust 1.89, Anchor 1.x |
+| Client generation | Codama |
+| Backend | Node.js, Express 5, TypeScript, MongoDB (Mongoose), Zod, `@solana/kit`, `@solana/pay`, pino |
+| Frontend | React 19, Vite, `@solana/kit`, wallet-standard |
+
+## Repository layout
+
+```
+programs/merchant-registry/   Anchor program (Rust)
+  src/instructions/           initialize, update, initialize_payment, mark_paid
+  src/state/                  Merchant and Payment accounts
+backend/                      API, watcher and verifier
+  src/controllers, routes/    HTTP layer
+  src/services/               auth, payments, Solana verification, webhooks
+  src/watcher/                per-merchant subscription manager
+  src/onchain/                typed wrappers over the generated client
+  src/models/                 Mongoose models
+app/                          React merchant app (landing, registration, dashboard)
+tests/                        Anchor program tests (run against devnet)
+codama.json                   Codama config for client generation
+```
+
+## Getting started
+
+### Prerequisites
+
+- Node.js 20+ and npm
+- A MongoDB instance (local or Atlas)
+- A Solana **devnet** RPC endpoint with a WebSocket URL. A provider such as Helius or QuickNode is recommended, because the public devnet endpoint rate-limits.
+- A funded devnet keypair for the **oracle**. It must match `ORACLE_AUTHORITY` in the program, and it pays fees and rent for each payment record.
+- Rust, the Solana CLI and Anchor, only if you want to rebuild or redeploy the program
+
+### Install
+
+```bash
+git clone https://github.com/swastikkakran/solana-payrail.git
+cd solana-payrail
+npm install
+(cd backend && npm install)
+(cd app && npm install)
+```
+
+### Configure the backend
+
+Create `backend/.env`:
+
+```bash
+MONGO_URI=mongodb://localhost:27017/payrail
+SOLANA_RPC_URL=https://<your-devnet-rpc>
+SOLANA_RPC_WSS_URL=wss://<your-devnet-rpc>
+USDC_MINT_ADDRESS=<usdc mint to accept>
+ORACLE_KEYPAIR_PATH=/path/to/oracle-keypair.json
+ENCRYPTION_MASTER_KEY=<64 hex characters>   # openssl rand -hex 32
+PAYRAIL_APP_URL=http://localhost:5173
+PORT=3000
+```
+
+| Variable | Description |
+| --- | --- |
+| `MONGO_URI` | MongoDB connection string |
+| `SOLANA_RPC_URL` / `SOLANA_RPC_WSS_URL` | Devnet HTTP and WebSocket endpoints |
+| `USDC_MINT_ADDRESS` | The USDC mint Payrail accepts |
+| `ORACLE_KEYPAIR_PATH` | Path to the oracle keypair JSON file |
+| `ENCRYPTION_MASTER_KEY` | 32-byte key as 64 hex characters; encrypts webhook secrets |
+| `PAYRAIL_APP_URL` | The single allowed CORS origin (default `http://localhost:5173`) |
+| `PORT` | API port (default `3000`) |
+| `LOG_LEVEL` | Optional pino log level |
+
+### Run
+
+```bash
+# API and watcher  ->  http://localhost:3000
+cd backend && npm run dev
+
+# merchant app  ->  http://localhost:5173
+cd app && npm run dev
+```
+
+### Demo mode
+
+The merchant app can run entirely in the browser, with a simulated wallet, Solana network and Payrail API. Nothing leaves the page, so it works with no backend, wallet or RPC.
+
+- Add `?demo` to the app URL to switch it on for the tab, or `?demo=off` to switch it off.
+- Build with `VITE_DEMO=always` to lock the app into demo mode.
+
+### Rebuild the program and client
+
+```bash
+anchor build        # builds the program and IDL
+npm run codegen     # regenerates the TypeScript client from the IDL
+```
+
+### Tests
+
+```bash
+npm test
+```
+
+Runs the Anchor program tests with ts-mocha against **devnet**, using the wallet from `Anchor.toml` and the keypairs in `tests/fixtures/`. The tests cover creating a merchant, toggling its active state, creating a payment, marking it paid, and rejecting `mark_paid` from an unauthorized signer.
+
+## API reference
+
+Base path: `/api/v1`. Request bodies are limited to 16 KB and a global rate limit applies.
+
+Payment endpoints authenticate with two headers:
+
+```
+x-api-key: <apiKey>
+x-api-secret: <apiSecret>
+```
+
+### Auth
+
+| Method | Path | Auth | Description |
+| --- | --- | --- | --- |
+| `POST` | `/auth/register` | none | Register a merchant (`name`, `email`, `webhookUrl`, `payoutWallet`). Requires the on-chain Merchant account to exist. Returns `apiKey`, `apiSecret` and `webhookSecret` once. |
+| `POST` | `/auth/rotate` | API key | Rotate API credentials. The previous pair stays valid for 24 hours. |
+| `DELETE` | `/auth` | API key | Delete the merchant (blocked while payments are pending). |
+| `POST` | `/auth/challenge` | none | Get a single-use sign-in message for a wallet. |
+| `POST` | `/auth/verify` | none | Verify the wallet signature and start a cookie session. |
+| `POST` | `/auth/logout` | session | End the session. |
+| `GET` | `/auth/me` | session | Current merchant. |
+
+### Payments
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `POST` | `/payments` | Create a payment request |
+| `GET` | `/payments` | List payments, optionally filtered by status |
+| `GET` | `/payments/:paymentId` | Get one payment |
+
+```bash
+curl -X POST http://localhost:3000/api/v1/payments \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: $PAYRAIL_API_KEY" \
+  -H "x-api-secret: $PAYRAIL_API_SECRET" \
+  -d '{"amount": 0.5, "currency": "SOL", "label": "Coffee", "message": "Order #42"}'
+```
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `amount` | number | Greater than 0, at most 1,000,000 |
+| `currency` | `"SOL"` or `"USDC"` | |
+| `label` | string, optional | Up to 100 characters |
+| `message` | string, optional | Up to 500 characters |
+
+The response includes a `solanaPayUrl` (render it as a QR code or link) and the stored `paymentRequestData`.
+
+## Webhooks
+
+When a payment is confirmed, Payrail sends a `POST` to the merchant's `webhookUrl`:
 
 ```json
 {
   "event": "payment.confirmed",
   "data": {
     "paymentId": "...",
-    "reference": "...",
-    "amount": 0.05,
+    "reference": "<reference public key>",
+    "amount": 0.5,
     "currency": "SOL",
     "transactionSignature": "...",
     "payerWallet": "...",
-    "confirmedAt": "2026-07-30T10:40:35.607Z"
+    "confirmedAt": "2026-10-19T10:00:00.000Z"
   }
 }
 ```
 
-Delivery retries on failure with exponential backoff (1m → 5m → 30m → 2h), then stops.
+The request carries an `x-webhook-signature` header: the hex HMAC-SHA256 of the **raw request body**, keyed with the merchant's `webhookSecret`. Verify it against the raw bytes, not re-serialized JSON:
 
----
+```js
+import crypto from "node:crypto";
 
-## API Reference
-
-Base path: `/api/v1`
-
-All payment endpoints require these headers:
-```
-x-api-key: <your api key>
-x-api-secret: <your api secret>
-```
-
-### Auth
-
-**`POST /auth/register`**
-```json
-{
-  "email": "merchant@example.com",
-  "webhookUrl": "https://your-server.com/webhooks/solana",
-  "payoutWallet": "<your Solana wallet address>"
+function isValid(rawBody, signatureHeader, webhookSecret) {
+  const expected = crypto.createHmac("sha256", webhookSecret).update(rawBody).digest("hex");
+  const a = Buffer.from(expected);
+  const b = Buffer.from(signatureHeader ?? "");
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 ```
-Returns `apiKey`, `apiSecret`, and `webhookSecret` — **shown once**, store them immediately. `webhookUrl` must be `https://`.
 
-**`POST /auth/rotate`** *(requires current credentials)*
-Issues a new `apiKey`/`apiSecret` pair. The previous pair remains valid for 24 hours.
+Respond with any `2xx` to acknowledge. Failed deliveries are retried up to three times, after 1 minute, 5 minutes and 30 minutes.
 
-**`DELETE /auth`** *(requires current credentials)*
-Deletes the merchant account. Blocked with a `400` if any payment is still `pending`.
+## Security design
 
-### Payments
+- **Webhook secrets** are encrypted at rest with AES-256-GCM, because the server needs to recover them to sign payloads.
+- **API secrets** are stored only as bcrypt hashes, because the server only needs to compare them.
+- **Sessions** use random tokens stored hashed, delivered in cookies.
+- **Wallet sign-in** uses single-use, expiring challenges signed by the merchant's wallet.
+- **Credential rotation** keeps the previous pair valid for 24 hours.
+- **Input handling:** all request bodies are validated with Zod and size-limited, and CORS is restricted to one configured origin.
+- **Non-custodial by design:** Payrail never holds funds or any key that can move them. The only key it holds is the oracle key, which can write payment records but not move merchant money.
 
-**`POST /payments`**
-```json
-{
-  "amount": 0.05,
-  "currency": "SOL",
-  "label": "Order #4521",
-  "message": "Thanks for your purchase"
-}
-```
-`currency` is `"SOL"` or `"USDC"`. `label`/`message` are optional — shown in the customer's wallet UI, not used in verification. Returns a `solanaPayUrl` to render as a QR code, and the created payment record.
+## Scope and known limitations
 
-**`GET /payments/:paymentId`**
-Fetch a single payment's current status.
+Payrail is a demo-day prototype. This is what it deliberately does not cover.
 
-**`GET /payments?status=confirmed&page=1&limit=20`**
-List payments, scoped to your merchant account only. `status` filters by `pending` / `confirmed` / `expired` / `failed`.
+**In scope:** SOL and USDC payments on devnet, reference-based matching, live detection with recovery, on-chain records, signed webhooks, wallet sign-in.
 
-### Payment statuses
-| Status | Meaning |
-|---|---|
-| `pending` | Created, awaiting payment, not yet expired |
-| `confirmed` | Verified on-chain — amount, token, recipient, and reference all matched |
-| `failed` | A transaction referencing this payment was found but didn't pass verification |
-| `expired` | No valid transaction found before the request's expiry window (15 min) |
+**Out of scope:** refunds, Token-2022 and other SPL tokens, recurring payments, and production-scale queueing or multi-instance orchestration.
 
----
+**Known limitations**
 
-## Setup
+- **Trust model.** On-chain payment records are written by a single oracle key that is hard-coded in the program. They are an audit trail of what Payrail attested, not independent or trustless settlement proof. `mark_paid` does not store a transaction signature or payer.
+- **Dashboard.** Outside demo mode, the dashboard cannot list or create payments. The payment endpoints only accept API-key auth, and no session-authenticated payment route exists yet. The full payment flow works through the API.
+- **Registration.** Registering checks that the on-chain Merchant account exists but does not require a wallet signature, so wallet ownership is not proven at registration.
+- **Webhook hardening.** Merchant webhook URLs have no SSRF protection, deliveries have no request timeout, and signatures carry no timestamp, so there is no replay protection.
+- **Oracle cost.** The oracle pays rent for every payment record, and there is no instruction to close and reclaim it.
+- **USDC edge case.** Verification expects the merchant's USDC token account to exist before the payment.
+- **Watcher robustness.** Pending payments only move to `expired` during a merchant's recovery sweep. A failed subscription is not retried, confirmation is not atomic (so a race can send duplicate webhooks), and a failed `mark_paid` is not retried. The recovery sweep covers only the latest 50 transactions per wallet.
+- **Scale.** One log subscription per merchant, and the webhook retry timer runs inside the API process.
+- **Testing.** The program tests run against devnet. There are no backend tests, including none for payment verification.
 
-```bash
-git clone https://github.com/swastikkakran/solana-payment-gateway.git
-cd solana-payment-gateway
-npm install
-```
+## License
 
-Create a `.env` file:
-
-```env
-PORT=3000
-MONGO_URI=mongodb://localhost:27017/solana-payment-gateway
-SOLANA_RPC_URL=<your devnet HTTP RPC endpoint — Helius or QuickNode recommended>
-SOLANA_RPC_WSS_URL=<your devnet WebSocket RPC endpoint — same provider, wss:// protocol>
-SOLANA_CLUSTER=devnet
-USDC_MINT_ADDRESS=4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU
-ENCRYPTION_MASTER_KEY=<32-byte hex string — generate with: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))">
-LOG_LEVEL=info
-```
-
-Note: two RPC URLs are required. The HTTP URL (`https://`) is used for RPC calls (`getTransaction`, `getSignaturesForAddress`). The WebSocket URL (`wss://`) is used for live log subscriptions. Most providers (Helius, QuickNode) give you both from the same dashboard — swap `https://` for `wss://` on the same endpoint.
-
-Build and run:
-
-```bash
-npm run build
-npm run start
-```
-
-Or for development without compiling:
-
-```bash
-npm run dev
-```
-
-The server connects to MongoDB, starts the API, and boots the watcher — restoring a live subscription for any merchant with an outstanding pending payment.
+MIT. See [LICENSE](./LICENSE).
 
 ---
 
-## Tech stack
-
-- **Node.js / Express 5** — REST API
-- **TypeScript** — full type coverage across services, models, middlewares, and controllers
-- **MongoDB / Mongoose** — merchants, payment requests, webhook delivery records; typed via Mongoose document interfaces (`IMerchant`, `IPayment`, `IWebhook`)
-- **@solana/kit** — RPC calls (`createSolanaRpc`), WebSocket subscriptions (`createSolanaRpcSubscriptions`, `logsNotifications`), address types, keypair generation
-- **@solana/pay** (anza-xyz, v1) — Solana Pay URL construction, Kit-native
-- **bcrypt** — API secret hashing
-- **AES-256-GCM (Node `crypto`)** — webhook secret encryption
-- **Zod** — request validation with inferred TypeScript types
-- **pino** — structured logging
-- **tsx** — TypeScript execution for development
-
----
-
-## Architecture
-
-```
-src/
-├── controllers/     # HTTP request/response handling
-├── services/        # business logic (auth, payments, on-chain verification, webhooks)
-├── middlewares/     # API-key auth, request validation
-├── models/          # Merchant, PaymentRequest, WebhookDelivery (with TS interfaces)
-├── routes/          # Express route definitions
-├── types/           # Express Request augmentation (req.merchant)
-├── validators/      # Zod schemas + param validation
-├── watcher/         # WebSocket subscription lifecycle + boot-time reconciliation
-└── utils/           # error/response shaping, crypto, logging
-```
-
----
-
-## v1 → v2: what changed
-
-v1 was written in JavaScript using `@solana/web3.js` v1. v2 is a full migration to TypeScript and `@solana/kit`.
-
-**Language:** JavaScript → TypeScript throughout. Strict mode enabled. Mongoose document interfaces on all three models. Express `Request` augmented with `req.merchant`.
-
-**Solana SDK:** `@solana/web3.js` → `@solana/kit`. Key changes:
-- `new Connection(url)` → `createSolanaRpc(url)` for HTTP RPC, `createSolanaRpcSubscriptions(wsUrl)` for WebSocket
-- `connection.onLogs(pubkey, callback)` → `rpcSubscriptions.logsNotifications({ mentions: [address] }).subscribe({ abortSignal })` with a `for await` loop
-- `Keypair.generate()` → `generateKeyPairSigner()` (async, returns `.address` directly as a base58 string)
-- `new PublicKey(str)` → `address(str)` (branded `Address` type)
-- Subscription management: numeric subscription IDs → `AbortController` stored per-merchant in a `Map`. Disconnect calls `controller.abort()`. Auto-reconnect on crash checks `controller.signal.aborted` before restarting.
-
-**@solana/pay:** old `@solana/pay` (solana-labs) → `@solana/pay` v1 (anza-xyz), which is Kit-native.
-
-**Two RPC URLs:** v1 used one `Connection` for both HTTP and WebSocket. v2 splits them — `SOLANA_RPC_URL` (https) for RPC calls, `SOLANA_RPC_WSS_URL` (wss) for subscriptions.
-
----
-
-## Known limitations (v2)
-
-- **Credential rotation supports exactly one grace-window credential set at a time.** A second rotation within an active grace window immediately invalidates the first — no queue of multiple valid old credentials.
-- **Reconciliation sweeps check the most recent 50 transactions** against a merchant's wallet. A merchant with very high transaction volume and many simultaneously pending payments could theoretically have an older pending payment fall outside this window during a sweep.
-- **SOL and USDC only.** No other SPL tokens are currently supported.
-- **No refunds.** Out of scope — this system is detection/verification only, not fund movement (by design — it's non-custodial).
-
----
-
-## Roadmap (v3)
-
-The next version extends the gateway with a genuine on-chain Solana program, making it more than a detection layer:
-
-- **On-chain merchant registry (Anchor program)** — merchant registration anchored on-chain via a PDA per merchant. Removes the off-chain MongoDB dependency for identity and creates an auditable, permissionless record of participating merchants.
-- **On-chain payment record** — confirmed payments written to chain, not just to MongoDB. Gives merchants a cryptographic, tamper-proof receipt for every confirmed payment without relying on the gateway's database.
-- **Token-2022 support** — transfer fees and interest-bearing mints break naive pre/post balance-diff parsing and need explicit handling at the on-chain level.
-- **Recurring payments** — an on-chain program for subscription-style payments with merchant-defined intervals and amounts, enforced by the program rather than the backend.
+Built by [Swastik Kakran](https://github.com/swastikkakran).

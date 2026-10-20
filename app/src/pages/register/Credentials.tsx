@@ -4,7 +4,7 @@ import { copyText, CopyButton } from '../../components/CopyButton';
 import { CheckIcon, CopyIcon, DownloadIcon, ExternalIcon, EyeIcon, EyeOffIcon } from '../../components/Icons';
 import type { MerchantCredentials } from '../../lib/api';
 import { explorerTxUrl, shortAddress } from '../../lib/format';
-import { useNavigate } from '../../lib/router';
+// import { useNavigate } from '../../lib/router';
 
 interface SecretRowProps {
     label: string;
@@ -62,14 +62,14 @@ export function Credentials({
     credentials,
     wallet,
     signature,
-    onDone,
+    // onDone,
 }: {
     credentials: MerchantCredentials;
     wallet: string;
     signature?: string;
     onDone: () => void;
 }) {
-    const navigate = useNavigate();
+    // const navigate = useNavigate();
     const [stored, setStored] = useState(false);
     const [copiedAll, setCopiedAll] = useState(false);
 
@@ -156,9 +156,9 @@ export function Credentials({
                     </span>
                     I&rsquo;ve stored these somewhere safe
                 </label>
-                <button type="button" className="btn btn-primary" disabled={!stored} onClick={() => { onDone(); navigate('/dashboard'); }}>
-                    Continue
-                </button>
+                {/* <button type="button" className="btn btn-primary" disabled={!stored} onClick={() => { onDone(); navigate('/dashboard'); }}> */}
+                    {/* Continue */}
+                {/* </button> */}
             </div>
         </section>
     );

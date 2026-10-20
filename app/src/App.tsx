@@ -6,7 +6,7 @@ import { DEMO } from './demo/mode';
 import { useRouter } from './lib/router';
 import { Landing } from './pages/landing/Landing';
 import { Register } from './pages/register/Register';
-import { Dashboard } from './pages/dashboard/Dashboard';
+// import { Dashboard } from './pages/dashboard/Dashboard';
 import { ConnectWalletDialog } from './wallet/ConnectWalletDialog';
 
 const TITLES: Record<string, string> = {
@@ -30,7 +30,7 @@ export function App() {
         return (
             <>
                 <a className="skip-link" href="#main">Skip to content</a>
-                <Dashboard />
+                {/* <Dashboard /> */}
                 <ConnectWalletDialog />
                 {DEMO && (
                     <>
